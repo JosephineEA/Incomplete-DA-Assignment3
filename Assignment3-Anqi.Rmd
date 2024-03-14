@@ -1,0 +1,547 @@
+---
+title: "IDA_Assignment3"
+author: "Anqi He"
+date: "2023-04-16"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+library(NHANES)
+library(kableExtra)
+library(data.table)
+library(mice)
+library(ggplot2)
+```
+
+# Question 1
+
+## (a)
+
+```{r}
+#load nhances dataset
+data(nhanes)
+#incomplete cases in nhances
+incomplete_case <- sum(!complete.cases(nhanes))
+#persentage of incomplete cases
+NA_per <- incomplete_case/dim(nhanes)[1]
+cat("Percentage of cases with incomplete data: ", NA_per*100, "%", sep = "")
+```
+
+## (b)
+
+```{r}
+imps <- mice(nhanes, printFlag = FALSE, seed = 1)
+stripplot(imps)
+```
+
+Since there are no large differences between the imputed and observed values then we can conclude that the imputed values are plausible.
+
+```{r}
+#predict bmi from age, hyp and chl by the normal linear regression model
+fits <- with(imps, lm(bmi ~ age + hyp +chl))
+#pool the results
+ests <- pool(fits)
+#the proportions of variance due to the missing data for each parameter
+lambda <- ests$pooled$lambda[2:4]
+
+cat("The proportions of variance due to the missing data for age: ", lambda[1]*100, "%", sep = "\n")
+cat("The proportions of variance due to the missing data for hyp: ", lambda[2]*100, "%", sep = "\n")
+cat("The proportions of variance due to the missing data for chl: ", lambda[3]*100, "%", sep = "\n")
+```
+
+The proportions of variance due to missing data for parameter **age**, parameter **hyp** and parameter **chl** are 68.64%, 35.04% and 30.41% respectively. The proportion refers to the effect due to missingness and thus, the parameter most effected by nonresponse is **age.**
+
+## (c)
+
+```{r}
+Parameter <- c("age", "hyp", "chl")
+lambda_result <- data.table(Parameter = c("age", "hyp", "chl"))
+for (i in 2:6){
+  imps_i <- mice(nhanes, printFlag = FALSE, seed = i)
+  #predict bmi from age, hyp and chl by the normal linear regression model
+  fits_i <- with(imps_i, lm(bmi ~ age + hyp +chl))
+  #pool the results
+  ests_i <- pool(fits_i)
+  #the proportions of variance due to the missing data for each parameter
+  lambda_i <- ests_i$pooled$lambda[2:4]
+  lambda_result <- cbind(lambda_result, lambda_i)
+}
+colnames(lambda_result) <- c("Parameter", "Lambda(seed=2)",  "Lambda(seed=3)",
+                             "Lambda(seed=4)",  "Lambda(seed=5)",  "Lambda(seed=6)")
+
+
+kable(lambda_result, caption = "Lambda for seed = (2,3,4,5,6)", digits = 3)|> 
+  kable_styling(full_width = F, position = "center", 
+                latex_options = "hold_position")
+```
+
+Under seeds from 2 to 6, the parameters most effected by nonresponse are **age**, **chl**, **chl**, **hyp** and **age** respectively, which is inconsistant from seed = 1. It is obvious that when M=5 by default, the imputation model is not stable.
+
+## (d)
+
+```{r}
+rm(list = ls())
+lambda_result2 <- data.table(Parameter = c("age", "hyp", "chl"))
+for (i in 1:6){
+  imps_i <- mice(nhanes, m=100, printFlag = FALSE, seed = i)
+  #predict bmi from age, hyp and chl by the normal linear regression model
+  fits_i <- with(imps_i, lm(bmi ~ age + hyp +chl))
+  #pool the results
+  ests_i <- pool(fits_i)
+  #the proportions of variance due to the missing data for each parameter
+  lambda_i <- ests_i$pooled$lambda[2:4]
+  lambda_result2 <- cbind(lambda_result2, lambda_i)
+}
+#change the column names
+colnames(lambda_result2) <- c("Parameter","Lambda(seed=1)", "Lambda(seed=2)",
+                              "Lambda(seed=3)",  "Lambda(seed=4)",  "Lambda(seed=5)",
+                              "Lambda(seed=6)")
+
+#present the results with kable
+kable(lambda_result2, caption = "Lambda for seed = (1,2,3,4,5,6) when M=100",
+      digits = 3)|> 
+  kable_styling(full_width = F, position = "center", 
+                latex_options = "hold_position")
+```
+
+While choosing M = 100, the parameters most effected by nonresponse is **age** under 5 (out of 6) different seeds. In this case, we prefer to use M = 100 since the results are more accurate and stable.
+
+# Question 2
+
+```{r}
+rm(list = ls())
+#read file dataex2
+load("dataex2.Rdata")
+
+#value of true beta1
+true_beta1 <- 3
+
+#Create an empty vector to store the coverage probabilities
+coverage_probs_sri <- numeric(100)
+coverage_probs_boots <- numeric(100)
+
+#Loop through each imputed dataset
+for (i in 1:100) {
+  #Extract the ith dataset from the array structure
+  dataset <- dataex2[, , i]
+  
+  #Results from stochastic regression imputation
+  data_sri <- mice(data.frame(x = dataset[,1], y = dataset[,2]), m = 20,
+                 seed = 1, method = "norm.nob", printFlag = FALSE)
+  fit_sri <- with(data_sri, lm(y ~ x))
+  result_sri <- summary(pool(fit_sri),conf.int = TRUE)
+  #Calculate the confidence intervals for beta1
+  lb_sri <- result_sri$'2.5 %'[2]
+  ub_sri <- result_sri$'97.5 %'[2]
+  
+  #Results from bootstrap-based imputation
+  data_boots <- mice(data.frame(x = dataset[,1], y = dataset[,2]), m = 20,
+                 seed = 1, method = "norm.boot", printFlag = FALSE)
+  fit_boots <- with(data_boots, lm(y ~ x))
+  result_boots <- summary(pool(fit_boots),conf.int = TRUE)
+  #Calculate the confidence intervals for beta2
+  lb_boots <- result_boots$'2.5 %'[2]
+  ub_boots <- result_boots$'97.5 %'[2]
+  
+  #Check if the true value of beta1 is covered by the confidence intervals
+  coverage_probs_sri[i] <- lb_sri <= true_beta1 & true_beta1 <= ub_sri
+  coverage_probs_boots[i] <- lb_boots <= true_beta1 & true_beta1 <= ub_boots
+}
+
+# Calculate the empirical coverage probabilities
+empirical_coverage_prob_stochastic <- mean(coverage_probs_sri)
+empirical_coverage_prob_bootstrap <- mean(coverage_probs_boots)
+
+# Print the results
+cat("Empirical Coverage Probability (Stochastic Regression Imputation):", empirical_coverage_prob_stochastic, "\n")
+cat("Empirical Coverage Probability (Bootstrap-based Imputation):", empirical_coverage_prob_bootstrap, "\n")
+
+```
+
+The empirical coverage probability for stochastic regression imputation is $0.88$, while the probability for the bootstrap imputation is $0.95$. Hence, we can conclude that bootstrap imputation(acknowledging parameter uncertainty) increases the accuracy of confidence interval than stochastic regression imputation (acknowledging parameter uncertainty).
+
+# Question3
+
+The linear regression model could be expressed as:
+
+$$
+\boldsymbol{y = \beta X +\epsilon}
+$$
+
+where $\boldsymbol{y}$ is the response, $X$ is the matrix of covariates, $\boldsymbol\beta$ is the vector of coefficients, and $\boldsymbol{\epsilon}$ is the vector of errors.
+
+In strategy(i), we firstly computed the predicted values from each fitted model in step 2. That is,
+
+$$
+\hat{\boldsymbol{y}}^{(m)} = \boldsymbol{X}\hat{\boldsymbol\beta}^{(m)}+\boldsymbol{\epsilon},
+$$
+
+where $\hat{\boldsymbol{y}}^{(m)}$ is the response from the complete dataset $m$.
+
+And then pool all the responses $\hat{\boldsymbol{y}}^{(m)}$ by averaging the predicted values across the imputed datasets and the final predicted is obtained below:
+
+$$
+\hat{\boldsymbol{y}} = \frac{1}{M} \sum_{m=1}^{M}\hat{\boldsymbol{y}}^{(m)},$$
+
+In strategy(ii), we firstly pool the regression coefficient from each fitted model in step 2:$$
+\hat{\boldsymbol{\beta}} = \frac{1}{M} \sum_{m=1}^{M}\hat{\boldsymbol{\beta}}^{(m)},  
+$$
+
+and then compute the predicted values afterward:$$
+\begin{aligned}
+\hat{\boldsymbol{y}} &= \boldsymbol{X} (\frac{1}{M} \sum_{m=1}^{M}\hat{\boldsymbol{\beta}}^{(m)}) \\
+&= \frac{1}{M} \sum_{m=1}^{M} \boldsymbol{X} \hat{\boldsymbol{\beta}}^{(m)} \\
+&= \frac{1}{M} \sum_{m=1}^{M} \hat{\boldsymbol{y}}^{(m)}.
+\end{aligned}$$
+
+As can be seen from the results, the predicted values from strategy(i) and strategy(ii) coincide.
+
+# Question4
+
+## (a)
+
+```{r}
+rm(list = ls())
+#read file dataex2
+load("dataex4.Rdata")
+```
+
+```{r}
+#true value of beta
+beta1 <- 1
+beta2 <- 2
+beta3 <- 1
+
+#impute the y and x1 
+imps <- mice(dataex4, m = 50, printFlag = FALSE, seed = 1)
+
+##predict y by the given model
+fits <- with(imps, lm(y ~ x1 + x2 + x1:x2))
+
+#summary of the estimation result
+result <- summary(pool(fits), conf.int = T)
+
+#extract the estimated betas
+est_betas <- result[,'estimate']
+
+#extract the corresponding 95% confidence interval for all parameters
+CI <- result[,c('2.5 %','97.5 %')]
+
+#print the results
+cat("True value beta1:", beta1, "\n",
+    "Estimated beta1: ", est_betas[2], "\n",
+    "with corresponding 95% confidence interval: [", CI[2,1], ", ",
+    CI[2,2], "]\n")
+cat("True value beta2:", beta2, "\n",
+  "Estimated beta2: ", est_betas[3],"\n",
+    "with corresponding 95% confidence interval: [", CI[3,1], ", ", 
+    CI[3,2], "]\n")
+cat("True value beta3:", beta3, "\n",
+  "Estimated beta3: ", est_betas[4], "\n",
+    "with corresponding 95% confidence interval: [", CI[4,1], ", ", 
+    CI[4,2], "]\n")
+```
+
+Only the estimated value of $\beta_2$ (1.9658) is in the estimated 95% confidence interval while $\beta_1$ is smaller than the estimated lower bound and $\beta_3$ is larger than the estimated upper bound. We could conclude that the *Impute, then transfer* model is not accurate on missing variables.
+
+## (b)
+
+```{r}
+#calculate the interaction variable and append it as a variable
+dataex4$x1x2 <- dataex4$x1 * dataex4$x2
+
+#set up default imputation
+imp0_pass <- mice(dataex4, maxit = 0)
+
+#passive imputation on x1x2
+meth <- imp0_pass$method
+meth['x1x2'] <- "~I(x1*x2)"
+
+#modify predictor matrix
+pred_pass <- imp0_pass$predictorMatrix
+pred_pass[c('x1','x2'), 'x1x2'] <- 0
+
+#avoid multicollinearity
+pred_pass[, c("x1", "x2")] <- 0
+pred_pass["x1","x2"] <- 1
+pred_pass["x2","x1"] <- 1
+
+#impute missing data with mice()
+imps_pass <- mice(dataex4, method = meth, 
+                    predictorMatrix = pred_pass,
+                    m = 50, printFlag = FALSE, seed = 1)
+
+#detect problems during the imputation
+imps_pass$loggedEvents
+
+```
+
+We could keep processing as no problems being detected.
+
+```{r}
+#fit model with imputed data
+fits_pass <- with(imps_pass, lm(y ~ x1 + x2 + x1x2))
+result_pass <- summary(pool(fits_pass), conf.int = TRUE)
+
+#extract the estimated values of beta
+est_betas_pass <- result_pass[,'estimate']
+
+#extract the corresponding 95% confidence interval for betas
+CI_pass <- result_pass[,c('2.5 %','97.5 %')]
+
+#print the results
+cat("True value beta1:", beta1, "\n",
+    "Estimated beta1: ", est_betas_pass[2], "\n",
+    "with corresponding 95% confidence interval: [", CI_pass[2,1], ", ",
+    CI_pass[2,2], "]\n")
+cat("True value beta2:", beta2, "\n",
+  "Estimated beta2: ", est_betas_pass[3],"\n",
+    "with corresponding 95% confidence interval: [", CI_pass[3,1], ", ", 
+    CI_pass[3,2], "]\n")
+cat("True value beta3:", beta3, "\n",
+  "Estimated beta3: ", est_betas_pass[4], "\n",
+    "with corresponding 95% confidence interval: [", CI_pass[4,1], ", ", 
+    CI_pass[4,2], "]\n")
+
+```
+
+Under *passive imputation*, the estimated value of $\beta_1$ and $\beta_3$ are in the estimated 95% confidence interval which means that the imputation model has captured the relationship between $x_1$ and $x_2$.
+
+However, $\beta_2$ is outside the estimated confidence interval.
+
+## (c)
+
+```{r}
+#imputate interaction term as it was just another variable 
+imps_4c <- mice(dataex4, m = 50, printFlag = FALSE, seed = 1)
+
+#fit model with imputed data
+fits_4c <- with(imps_4c, lm(y ~ x1 + x2 + x1x2))
+
+#estimation result
+result_4c <- summary(pool(fits_4c), conf.int = TRUE)
+
+#extract the estimated beta1s
+est_betas_4c <- result_4c[,'estimate']
+
+#extract the corresponding 95% confidence interval for beta1, beta2, and beta3
+CI_4c <- result_4c[,c('2.5 %','97.5 %')]
+
+#print the results
+cat("True value beta1:", beta1, "\n",
+    "Estimated beta1: ", est_betas_4c[2], "\n",
+    "with corresponding 95% confidence interval: [", CI_4c[2,1], ", ",
+    CI_4c[2,2], "]\n")
+cat("True value beta2:", beta2, "\n",
+  "Estimated beta2: ", est_betas_4c[3],"\n",
+    "with corresponding 95% confidence interval: [", CI_4c[3,1], ", ", 
+    CI_4c[3,2], "]\n")
+cat("True value beta3:", beta3, "\n",
+  "Estimated beta3: ", est_betas_4c[4], "\n",
+    "with corresponding 95% confidence interval: [", CI_4c[4,1], ", ", 
+    CI_4c[4,2], "]\n")
+```
+
+All the true values of $\beta_1$, $\beta_2$ and $\beta_3$ are in the estimated confidence interval. In this angle, just another variable approach is the most accurate.
+
+## (d)
+
+The "just another variable" approach for imputing interactions in the context of multiple imputation has a conceptual drawback, that is, the imputed values fails to preserve the relationship between variables x1 and x2 for their interaction term x1x2 resulting in not reflecting the true underlying relationship between the interacting variables, leading to inaccurate estimates of the interaction effects.
+
+# Question 5
+
+## Step 0: Data inspection
+
+We start by taking a first look at the data, and by using the command \texttt{dim} we see that there are 500 rows, which in this particular example represent individuals, and 12 variables.
+
+```{r}
+rm(list = ls())
+#read file dataex2
+load("NHANES2.Rdata")
+dim(NHANES2)
+```
+
+Then, inspect the nature of our variables and check whether they are correctly coded.
+
+```{r}
+str(NHANES2)
+```
+
+Have a quick idea about min/max/mean/quantiles of the observed data in each variable along with the number of missing values.
+
+```{r}
+summary(NHANES2)
+```
+
+We should also inspect the missing data patterns. We can use, for instance, the \texttt{md.pattern} function from \texttt{mice}, although in this case due to the large number of variables, it becomes difficult to extract meaningful information from it.
+
+```{r include = TRUE, message = FALSE, results='hide'}
+require(mice)
+mdpat_mice <- md.pattern(NHANES2)
+mdpat_mice
+```
+
+We can conclude, for instance, that there are 411 observations with observed values on all 12 variables. Also, 405 observations for which only the bilirubin is missing, etc. As a further check, we can also look at the correlations between the different variables.
+
+Finally, we could inspect whether the normality assumption is roughly met with the package \texttt{JointAI}.
+
+```{r}
+library(JointAI)
+par(mar = c(3, 3, 2, 1), mgp = c(2, 0.6, 0))
+plot_all(NHANES2, breaks = 30, ncol = 4)
+```
+
+## 
+
+## Step 1: Imputation
+
+Having inspected the data, we are ready to start our imputation procedure. We will start by doing a setup or dry run of \texttt{mice()}, without any iterations, which will create the default versions of everything that needs to be specified. These default settings can then be adapted to our particular dataset.
+
+```{r}
+imp <- mice(NHANES2, maxit = 10, m = 50, seed = 1, printFlag = FALSE)
+imp
+```
+
+Checking the loggedEvents contained in our object imp allows us to know if \texttt{mids} detected any problems during the imputation.
+
+```{r}
+imp$loggedEvents
+```
+
+We need to check whether the MICE algorithm has converged. Otherwise, there is no guarantee that the results we are obtaining are correct. The mean and variance of the imputed values per iteration and variable are stored in the elements \texttt{chainMean} and \texttt{chainVar} of the \texttt{mids} object \texttt{imp}. We can just plot our object and visualise the traceplots.
+
+```{r message=FALSE, warning=FALSE}
+plot(imp, layout = c(4,4))
+```
+
+Now that we know that the iterative algorithm appears to have converged for all variables that were imputed, we can compare the distribution of the imputed values against the distribution of the observed values. We start doing that for the continuous variables.
+
+```{r}
+densityplot(imp)
+```
+
+First note that we are using $M=50$ and because the density of the observed data (the one in blue) is possibly plotted first, we can barely see it. The most outstanding plots are the ones from SBP and height. Although there is nothing here that we should be too worried about, let us investigate if such differences in the two distributions (observed versus imputed), can be explained by other variables. Specifically, let us check SBP conditional on the gender and height conditional on gender.
+
+```{r}
+densityplot(imp, ~SBP|gender)
+```
+
+```{r}
+densityplot(imp, ~hgt|gender)
+```
+
+It seems that gender, to a certain extent, explain the differences between the observed and imputed values for SBP and height.
+
+With regard to binary/categorical variables, we can compare the proportion of values in each category. \texttt{mice} does not provide a function to do this, but there is a nice one, \texttt{propplot}, implemented by Nicole Erler and available on her github.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, fig.height=6, fig.width=6}
+require(devtools)
+require(reshape2)
+require(RColorBrewer)
+require(ggplot2)
+source_url("https://gist.githubusercontent.com/NErler/0d00375da460dd33839b98faeee2fdab/raw/c6f537ecf80eddcefd94992ec7926aa57d454536/propplot.R")
+
+propplot(imp)
+```
+
+We observe a large discrepancy between the observed and imputed data distributions for the educational status variable, but because the educational status variable only has 1 missing values (out of 500), we should not be too worried about this.
+
+The function \texttt{xyplot()} allows to visualise scatterplots of the imputed and observed values for pairs of variables.
+
+```{r message=FALSE, warning=FALSE}
+xyplot(imp, hgt ~ wgt | gender, pch = c(1, 20))
+```
+
+## Step 2: Analysis
+
+Having confirmed that our imputation step was successful, we can proceed to the analysis of the imputed data. Our substantive model of interest is: $$
+\text{wgt}=\beta_0+\beta_1\text{gender}+\beta_2\text{age}+\beta_3\text{hgt}+\beta_4\text{WC}+\epsilon, \quad \epsilon \sim N(0,\sigma^2)
+$$
+
+```{r}
+fits <-  with(imp, lm(wgt ~ gender + age + hgt + WC))
+```
+
+We can further explore the information contained in the object \texttt{fit}. For instance, we can look at the summary of the fitted model in the first imputed dataset.
+
+```{r}
+summary(fits$analyses[[1]])
+```
+
+Also, to do model specification/validation, e.g., transformations, we can either look at the complete cases or use one of the completed/imputed datasets. Any transformations will have to apply to all the datasets, so we should not be too dataset-specific in our checks. If we decide transformations are needed, we might reconsider the imputation models too and fit them with transformed values.
+
+```{r message=FALSE, warning=FALSE}
+comp1 <- complete(imp, 1)
+plot(fits$analyses[[1]]$fitted.values, residuals(fits$analyses[[1]]),
+     xlab = "Fitted values", ylab = "Residuals")
+```
+
+There is no obvious pattern in the residuals plot, we can keep processing with the model.
+
+We can also do a QQplot and nothing looks suspicious.
+
+```{r}
+qqnorm(rstandard(fits$analyses[[1]]), xlim = c(-4, 4), ylim = c(-6, 6))
+qqline(rstandard(fits$analyses[[1]]), col = 2)
+```
+
+## Step 3: Pooling
+
+```{r}
+pooled_ests <- pool(fits)
+summary(pooled_ests, conf.int = TRUE)
+```
+
+We can use the function \texttt{pool.r.squared} that calculates the pooled (adjusted) $R^2$.
+
+```{r}
+pool.r.squared(pooled_ests, adjusted = TRUE)
+```
+
+The adjusted R-squared is approximately $0.8564$, that is, almost 86% of the variance in the response variable is explainable by the model's predictors.
+
+We want to test whether the each variable has a relevant contribution for the **wgt** model. We should fit the model without gender, age, height and WC respectively and compare the two models.
+
+```{r message=FALSE, warning=FALSE}
+fit_no_gender <- with(imp, lm(wgt ~ age + hgt + WC))
+D1(fits, fit_no_gender)
+```
+
+In this case the Wald test statistic is not significant, and therefore the gender has no relevant contribution to the **wgt** model.
+
+```{r message=FALSE, warning=FALSE}
+fit_no_age <- with(imp, lm(wgt ~ gender + hgt + WC))
+D1(fits, fit_no_age)
+```
+
+We now have a significant Wald test and therefore we should keep this variable in our model.
+
+```{r}
+fit_no_WC <- with(imp, lm(wgt ~ gender + age + hgt))
+D1(fits, fit_no_WC)
+```
+
+We now have a significant Wald test and therefore we should keep this variable in our model.
+
+## 
+
+## Step 4: Conclusion
+
+Finally, we fit the model without gender:
+
+$$
+\text{wgt}=\beta_0+\beta_1\text{age}+\beta_2\text{hgt}+\beta_3\text{WC}+\epsilon, \quad \epsilon \sim N(0,\sigma^2)$$
+
+```{r}
+pooled_ests_no_gender <- pool(fit_no_gender)
+summary(pooled_ests_no_gender, conf.int = TRUE)
+```
+
+```{r}
+pool.r.squared(pooled_ests_no_gender, adjusted = TRUE)
+```
+
+The final model obtained:$$
+\text{wgt}=-108.9859913-0.1551626\text{age}+56.9472579\text{hgt}+1.0231420\text{WC}$$
